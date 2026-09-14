@@ -33,15 +33,13 @@ pub fn bytes_to_i64(name: &str, bytes: &[u8], sign: Sign) -> Result<i64, GenApiE
             *byte = 0xFF;
         }
     }
+    // Note: The GenAPI spec technically doesn't allow this to happen for 64-bit
+    // integers that are marked unsigned. However the reference implementation
+    // does permit it (does not return an error). The default value
+    // of "unsigned" also makes it very prone for features to accidentally
+    // become unsigned. This will produce some false-positive intepretations,
+    // and it would be up to the user to re-cast it.
     let value = i64::from_be_bytes(buf);
-    // A full-width unsigned register can hold values an i64 cannot. GenApi's
-    // IInteger is int64, so there is nowhere to put them; say so rather than
-    // hand back a negative number.
-    if !sign.is_signed() && bytes.len() == 8 && value < 0 {
-        return Err(GenApiError::Parse(format!(
-            "node {name} holds an unsigned 64-bit value larger than i64::MAX"
-        )));
-    }
     Ok(value)
 }
 
