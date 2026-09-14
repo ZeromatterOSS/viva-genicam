@@ -2648,4 +2648,50 @@ mod tests {
         assert_eq!(io.regs.borrow()[&0x200], 1u32.to_be_bytes());
         assert_eq!(nodemap.get_float("Exp", &io).expect("fresh read"), 5000.0);
     }
+
+    /// A `<Value>`-backed integer must be writable, not only readable.
+    ///
+    /// Such a node holds its value in the node map rather than on the device —
+    /// vendors use them for selectors, whose value then feeds other nodes'
+    /// `pIndex`/`pAddress`. `get_integer` honours `node.value`; `set_integer`
+    /// did not, so an `<Enumeration>` delegating to one could be read but never
+    /// written, failing with "no addressing or pValue" for a node that was
+    /// never meant to have either.
+    #[test]
+    fn a_value_backed_integer_can_be_written() {
+        const XML: &str = r#"
+            <RegisterDescription SchemaMajorVersion="1" SchemaMinorVersion="1" SchemaSubMinorVersion="0">
+                <Enumeration Name="TriggerSelector">
+                    <EnumEntry Name="AcquisitionStart"><Value>0</Value></EnumEntry>
+                    <EnumEntry Name="FrameStart"><Value>1</Value></EnumEntry>
+                    <pValue>TriggerSelectorInt</pValue>
+                </Enumeration>
+                <Integer Name="TriggerSelectorInt">
+                    <Value>0</Value>
+                    <AccessMode>RW</AccessMode>
+                    <Min>0</Min>
+                    <Max>1</Max>
+                </Integer>
+            </RegisterDescription>
+        "#;
+
+        let model = viva_genapi_xml::parse(XML).expect("parse value-backed xml");
+        let mut nodemap = NodeMap::try_from_xml(model).expect("build nodemap");
+        let io = MockIo::with_registers(&[]);
+
+        assert_eq!(
+            nodemap.get_enum("TriggerSelector", &io).unwrap(),
+            "AcquisitionStart"
+        );
+
+        nodemap
+            .set_enum("TriggerSelector", "FrameStart", &io)
+            .expect("write the selector");
+
+        assert_eq!(nodemap.get_integer("TriggerSelectorInt", &io).unwrap(), 1);
+        assert_eq!(
+            nodemap.get_enum("TriggerSelector", &io).unwrap(),
+            "FrameStart"
+        );
+    }
 }

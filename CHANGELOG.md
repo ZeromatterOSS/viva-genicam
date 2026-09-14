@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `<Value>`-backed integer can now be written, not only read.** Such a node
+  holds its value in the node map rather than on the device; vendors use them
+  for selectors that no register backs, whose value other nodes then read
+  through `pIndex`/`pAddress`. `NodeMap::get_integer` already returned
+  `node.value`, but `set_integer` fell through to address resolution and
+  reported `"no addressing or pValue"` — for a node that is not supposed to
+  have either. An `<Enumeration>` delegating to one was therefore readable and
+  unwritable: on a FLIR Blackfly S, `TriggerSelector` could not be set because
+  its `pValue` target `TriggerSelectorInt` is `<Value>`-backed. Range and
+  increment validation also moved above address resolution, so an out-of-range
+  write no longer pays for the `pAddress`/`pIndex` reads before being rejected.
+
 ## [0.7.0] - 2026-09-30
 
 Three changes need a read before upgrading. **`viva_zenoh_api::API_VERSION` is
