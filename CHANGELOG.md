@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`<pInvalidator>` is now parsed and tied into cache invalidation.** Most
+  integer registers are simply cached on the first read, and that cache was
+  not being invalidated by the explicit `<pInvalidator>` entries in the
+  GenAPI XML. This was a problem for `<Command>`s that are used to sample
+  data and update certain registers. Before this patch, the library would
+  simply return a cached value and never re-query the registers.
+
 ## [0.5.0] - 2026-08-26
 
 Two behaviour changes need a read before upgrading, both under the headings

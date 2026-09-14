@@ -74,8 +74,11 @@ pub const TAG_P_IS_IMPLEMENTED: &[u8] = b"pIsImplemented";
 pub const TAG_P_IS_AVAILABLE: &[u8] = b"pIsAvailable";
 /// XML element referencing a node whose value locks the feature (RW→RO).
 pub const TAG_P_IS_LOCKED: &[u8] = b"pIsLocked";
+/// XML element referencing a node whose change invalidates this node's cache.
+pub const TAG_P_INVALIDATOR: &[u8] = b"pInvalidator";
 
-/// Handle a `<pIsImplemented>` / `<pIsAvailable>` / `<pIsLocked>` element.
+/// Handle a `<pIsImplemented>` / `<pIsAvailable>` / `<pIsLocked>` /
+/// `<pInvalidator>` element.
 ///
 /// Returns `true` when the element was consumed (caller should continue),
 /// `false` when the element name does not match and the caller should fall
@@ -89,16 +92,25 @@ pub fn handle_predicate_start(
     event: &BytesStart<'_>,
     prefs: &mut PredicateRefs,
 ) -> Result<bool, XmlError> {
-    let slot: &mut Option<String> = match event.name().as_ref() {
-        TAG_P_IS_IMPLEMENTED => &mut prefs.p_is_implemented,
-        TAG_P_IS_AVAILABLE => &mut prefs.p_is_available,
-        TAG_P_IS_LOCKED => &mut prefs.p_is_locked,
-        _ => return Ok(false),
-    };
+    let name = event.name();
+    let tag = name.as_ref();
+    if !matches!(
+        tag,
+        TAG_P_IS_IMPLEMENTED | TAG_P_IS_AVAILABLE | TAG_P_IS_LOCKED | TAG_P_INVALIDATOR
+    ) {
+        return Ok(false);
+    }
     let text = read_text_start(reader, event)?;
     let trimmed = text.trim();
     if !trimmed.is_empty() {
-        *slot = Some(trimmed.to_string());
+        match tag {
+            TAG_P_IS_IMPLEMENTED => prefs.p_is_implemented = Some(trimmed.to_string()),
+            TAG_P_IS_AVAILABLE => prefs.p_is_available = Some(trimmed.to_string()),
+            TAG_P_IS_LOCKED => prefs.p_is_locked = Some(trimmed.to_string()),
+            // `<pInvalidator>` by elimination: it repeats on a node, so it
+            // accumulates rather than filling a single slot.
+            _ => prefs.p_invalidators.push(trimmed.to_string()),
+        }
     }
     Ok(true)
 }
