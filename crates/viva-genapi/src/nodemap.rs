@@ -296,11 +296,9 @@ impl NodeMap {
             let pv = pv.clone();
             return self.set_integer(&pv, value, io);
         }
-        let addressing = node
-            .addressing
-            .as_ref()
-            .ok_or_else(|| GenApiError::NodeNotFound(format!("{name}: no addressing or pValue")))?;
-        let (address, len) = self.resolve_address(name, addressing, io)?;
+        // Validated before the address resolves: an out-of-range value is
+        // rejected without the `pAddress`/`pIndex` reads that resolution costs,
+        // and a node holding its value in the map has no address to resolve.
         if value < node.min || value > node.max {
             return Err(GenApiError::Range(name.to_string()));
         }
@@ -310,6 +308,25 @@ impl NodeMap {
         {
             return Err(GenApiError::Range(name.to_string()));
         }
+        // A `<Value>` node keeps its value in the node map rather than on the
+        // device. Vendors use them for selectors that no register backs, whose
+        // value other nodes then read through `pIndex`/`pAddress`. `get_integer`
+        // already returns `value`; writing has to update it in place, since
+        // there is no register to carry the change.
+        if node.value.is_some() {
+            let Some(Node::Integer(target)) = self.nodes.get_mut(name) else {
+                return Err(GenApiError::NodeNotFound(name.to_string()));
+            };
+            target.value = Some(value);
+            debug!(node = %name, raw = value, "write integer feature held in the node map");
+            self.invalidate_dependents(name);
+            return Ok(());
+        }
+        let addressing = node
+            .addressing
+            .as_ref()
+            .ok_or_else(|| GenApiError::NodeNotFound(format!("{name}: no addressing or pValue")))?;
+        let (address, len) = self.resolve_address(name, addressing, io)?;
         if let Some(bitfield) = node.bitfield {
             let encoded = encode_bitfield_value(name, value, bitfield.bit_length, node.min < 0)?;
             let mut raw = get_raw_or_read(&node.raw_cache, io, address, len)?;
