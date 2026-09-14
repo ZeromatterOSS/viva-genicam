@@ -2042,4 +2042,113 @@ mod tests {
             "Invisible node must NOT be visible at Guru level"
         );
     }
+
+    /// A node naming a command in `<pInvalidator>` must re-read after it runs.
+    ///
+    /// Integer registers cache on first read and are only dropped by
+    /// `invalidate_dependents`, which walks structural references — pValue,
+    /// pMin, pMax, addressing, predicates. A latched feature has none of those
+    /// pointing at the command that samples it; the link exists solely as
+    /// `<pInvalidator>`. While that element went unparsed, the first read of a
+    /// latched register was the only one that ever reached the device.
+    #[test]
+    fn a_command_invalidates_the_nodes_naming_it_as_invalidator() {
+        const XML: &str = r#"
+            <RegisterDescription SchemaMajorVersion="1" SchemaMinorVersion="1" SchemaSubMinorVersion="0">
+                <Command Name="DataSetLatch">
+                    <Address>0x100</Address>
+                    <Length>4</Length>
+                    <CommandValue>1</CommandValue>
+                </Command>
+                <Integer Name="OffsetLatched">
+                    <pInvalidator>DataSetLatch</pInvalidator>
+                    <Address>0x200</Address>
+                    <Length>4</Length>
+                    <AccessMode>RO</AccessMode>
+                </Integer>
+            </RegisterDescription>
+        "#;
+
+        let model = viva_genapi_xml::parse(XML).expect("parse invalidator xml");
+        let mut nodemap = NodeMap::try_from_xml(model).expect("build nodemap");
+        let io = MockIo::with_registers(&[
+            (0x100, vec![0; 4]),
+            (
+                0x200,
+                i64_to_bytes("OffsetLatched", 11, 4, Sign::Signed).unwrap(),
+            ),
+        ]);
+
+        assert_eq!(nodemap.get_integer("OffsetLatched", &io).unwrap(), 11);
+        assert_eq!(nodemap.get_integer("OffsetLatched", &io).unwrap(), 11);
+        assert_eq!(
+            io.read_count(0x200),
+            1,
+            "an uninvalidated register should be served from cache"
+        );
+
+        // Stand in for the device re-sampling the register as the command runs.
+        io.write(
+            0x200,
+            &i64_to_bytes("OffsetLatched", 22, 4, Sign::Signed).unwrap(),
+        )
+        .unwrap();
+        nodemap.exec_command("DataSetLatch", &io).expect("latch");
+
+        assert_eq!(
+            nodemap.get_integer("OffsetLatched", &io).unwrap(),
+            22,
+            "the latch must drop the cached sample"
+        );
+        assert_eq!(io.read_count(0x200), 2);
+    }
+
+    /// `<pInvalidator>` may repeat, and every edge must fire independently.
+    #[test]
+    fn every_invalidator_on_a_node_drops_its_cache() {
+        const XML: &str = r#"
+            <RegisterDescription SchemaMajorVersion="1" SchemaMinorVersion="1" SchemaSubMinorVersion="0">
+                <Command Name="LatchA">
+                    <Address>0x100</Address>
+                    <Length>4</Length>
+                    <CommandValue>1</CommandValue>
+                </Command>
+                <Command Name="LatchB">
+                    <Address>0x104</Address>
+                    <Length>4</Length>
+                    <CommandValue>1</CommandValue>
+                </Command>
+                <Integer Name="Sampled">
+                    <pInvalidator>LatchA</pInvalidator>
+                    <pInvalidator>LatchB</pInvalidator>
+                    <Address>0x200</Address>
+                    <Length>4</Length>
+                    <AccessMode>RO</AccessMode>
+                </Integer>
+            </RegisterDescription>
+        "#;
+
+        let model = viva_genapi_xml::parse(XML).expect("parse invalidator xml");
+        let mut nodemap = NodeMap::try_from_xml(model).expect("build nodemap");
+        let io = MockIo::with_registers(&[
+            (0x100, vec![0; 4]),
+            (0x104, vec![0; 4]),
+            (0x200, i64_to_bytes("Sampled", 1, 4, Sign::Signed).unwrap()),
+        ]);
+
+        assert_eq!(nodemap.get_integer("Sampled", &io).unwrap(), 1);
+        for (command, expected) in [("LatchA", 2), ("LatchB", 3)] {
+            io.write(
+                0x200,
+                &i64_to_bytes("Sampled", expected, 4, Sign::Signed).unwrap(),
+            )
+            .unwrap();
+            nodemap.exec_command(command, &io).expect("latch");
+            assert_eq!(
+                nodemap.get_integer("Sampled", &io).unwrap(),
+                expected,
+                "{command} should have invalidated the cache"
+            );
+        }
+    }
 }

@@ -35,15 +35,17 @@ pub enum EnumValueSrc {
     FromNode(String),
 }
 
-/// References to predicate provider nodes used for runtime gating.
+/// References from a node to other nodes it depends on at runtime.
 ///
 /// GenICam's `pIsImplemented`, `pIsAvailable` and `pIsLocked` each point at
 /// another node (typically an Integer, Boolean or IntSwissKnife) whose current
 /// value gates whether a feature is implemented, accessible, or writable.
-/// These three references are shared by most node variants, so we collect them
-/// into one struct to keep the variant fields small.
+/// `pInvalidator` names a node whose change drops this node's cached value.
+/// All four are shared by most node variants, so we collect them into one
+/// struct to keep the variant fields small, and because they are consumed
+/// together by one dependency-graph walk ([`PredicateRefs::references`]).
 ///
-/// All three fields are optional; a node with no predicates has
+/// All fields are optional; a node with no predicates has
 /// [`PredicateRefs::default()`]. Serde fields use the GenICam XML spelling so
 /// round-trip JSON matches the XML attribute names.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +67,13 @@ pub struct PredicateRefs {
     /// Name of a node evaluating to non-zero iff the feature is locked (RW→RO).
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "pIsLocked")]
     pub p_is_locked: Option<String>,
+    /// Names of nodes whose change invalidates this node's cached value.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        rename = "pInvalidator"
+    )]
+    pub p_invalidators: Vec<String>,
 }
 
 impl PredicateRefs {
@@ -77,6 +86,9 @@ impl PredicateRefs {
         ]
         .into_iter()
         .flatten()
+        // Adding the invalidators to the set of references is what causes the
+        // nodemap to add an edge that will be traversed by invalidate_dependents().
+        .chain(self.p_invalidators.iter().map(String::as_str))
     }
 
     /// `true` when every field is `None`.
@@ -84,6 +96,7 @@ impl PredicateRefs {
         self.p_is_implemented.is_none()
             && self.p_is_available.is_none()
             && self.p_is_locked.is_none()
+            && self.p_invalidators.is_empty()
     }
 }
 
@@ -2335,5 +2348,33 @@ mod tests {
     fn clean_document_skips_nothing() {
         let model = parse(FIXTURE).expect("parse fixture");
         assert!(model.skipped.is_empty());
+    }
+
+    /// Tests that every `<pInvalidator>` on a node is collected.
+    ///
+    /// The element may repeat, and an empty one is a vendor placeholder rather
+    /// than a reference to a node named "".
+    #[test]
+    fn invalidators_are_collected_into_predicate_refs() {
+        const XML: &str = r#"
+            <RegisterDescription SchemaMajorVersion="1" SchemaMinorVersion="1" SchemaSubMinorVersion="0">
+                <Integer Name="Sampled">
+                    <pInvalidator>LatchA</pInvalidator>
+                    <pInvalidator></pInvalidator>
+                    <pInvalidator>LatchB</pInvalidator>
+                    <Address>0x200</Address>
+                    <Length>4</Length>
+                    <AccessMode>RO</AccessMode>
+                </Integer>
+            </RegisterDescription>
+        "#;
+
+        let model = parse(XML).expect("parse invalidators");
+        let NodeDecl::Integer { predicates, .. } = &model.nodes[0] else {
+            panic!("expected an Integer node");
+        };
+        assert_eq!(predicates.p_invalidators, ["LatchA", "LatchB"]);
+        assert!(!predicates.is_empty());
+        assert!(predicates.references().eq(["LatchA", "LatchB"]));
     }
 }
