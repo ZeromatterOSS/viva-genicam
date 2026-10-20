@@ -172,10 +172,15 @@ impl UrlLocation {
 /// 1. **Key-value**: `local:address=0x10;length=0x3`
 /// 2. **GenICam standard**: `Local:///filename;hex_address;hex_length`
 ///
-/// In format 2, the filename is optional (can be just `///;addr;len`).
+/// In format 2, the filename is optional (can be just `///;addr;len`), and the
+/// standard allows a trailing query parameter, which is ignored.
 fn parse_local_url(rest: &str) -> Result<UrlLocation, XmlError> {
     // Strip the `///` prefix used by the standard GenICam URL format.
-    let trimmed = rest.strip_prefix("///").unwrap_or(rest).trim();
+    let trimmed = rest.strip_prefix("///").unwrap_or(rest);
+    let trimmed = trimmed
+        .split_once('?')
+        .map_or(trimmed, |(path, _query)| path)
+        .trim();
     if trimmed.is_empty() {
         return Err(XmlError::Invalid("empty local URL".into()));
     }
